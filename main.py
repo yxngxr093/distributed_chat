@@ -1,31 +1,37 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
+from sqlalchemy import select
 import uvicorn
 
+from database import init_db
+from database import AsyncSessionLocal, Message 
 
 
 app = FastAPI()
 
+@app.on_event("startup")
+async def startup_event():
+    await init_db()
+    print("Database Initialized!")
+
 import os
 if not os.path.exists("static"):
     os.makedirs("static")
-
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 active_connections = {} 
-message_history = []
 user_counter = 0
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    global active_connections, message_history, user_counter
+    global active_connections, user_counter
 
     await websocket.accept()
     
     user_counter+=1
-    username = f"User {user_counter}"
+    username = f"User{user_counter}"
 
     active_connections[websocket] = {
         "username": username,
@@ -36,9 +42,18 @@ async def websocket_endpoint(websocket: WebSocket):
 
     user_room = active_connections[websocket]["room"]
 
-    for msg in message_history:
-        if msg["room"] == user_room:  # Only send messages from their room
-            historical_message = f"[{msg['room']}] {msg['user']}: {msg['message']}"
+    async with AsyncSessionLocal() as session:
+        # Query messages from database
+        result = await session.execute(
+            select(Message)
+            .where(Message.room == user_room)
+            .order_by(Message.timestamp.desc())
+            .limit(50)
+        )
+        messages = result.scalars().all()
+        
+        for msg in messages:
+            historical_message = f"[{msg.room}] {msg.username}: {msg.text}"
             await websocket.send_text(historical_message)
 
     
@@ -51,8 +66,16 @@ async def websocket_endpoint(websocket: WebSocket):
                 continue
             print(f"Received message from {username}: '{message}'")
             print(f"Broadcasting to {len(active_connections)} connections")
-            
-            message_history.append({"user": username, "message": message, "room": "General"})
+        
+            async with AsyncSessionLocal() as session:
+                new_message = Message(
+                    username=username,
+                    text=message,
+                    room="General"
+                )
+                session.add(new_message)
+                await session.commit()
+
             formatted_msg = f"[General] {username}: {message}"
 
             sender_room = active_connections[websocket]["room"]
@@ -63,7 +86,6 @@ async def websocket_endpoint(websocket: WebSocket):
                 if client_room == sender_room:  # Only send if in same room
                     await client.send_text(formatted_msg)
                 
-            print(message_history)
 
     except WebSocketDisconnect:
         del active_connections[websocket]
