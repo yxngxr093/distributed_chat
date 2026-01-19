@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Discord-Style Chat</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        #rooms-section { 
+            border: 1px solid #ccc; 
+            padding: 10px; 
+            margin-bottom: 10px;
+            background: #f5f5f5;
+        }
+        .room-btn {
+            margin: 5px;
+            padding: 8px 15px;
+            cursor: pointer;
+        }
+        .room-btn.active {
+            background: #007bff;
+            color: white;
+            font-weight: bold;
+        }
+        #messages {
+            border: 1px solid #ccc;
+            padding: 10px;
+            height: 300px;
+            overflow-y: scroll;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="chat-section" style="display:none;">
+        <h3>Welcome, <span id="display-username">User</span></h3>
+
+        <div id="rooms-section">
+            <strong>Current Room: <span id="current-room">General</span></strong>
+            <div id="room-list"></div>
+        </div>
+        
+        <div id="messages"></div>
+        
+        <div style="margin-top: 10px;">
+            <input type="text" id="messageInput" placeholder="Type a message..." style="width: 70%;">
+            <button onclick="sendMessage()">Send</button>
+            <button onclick="logout()" style="float: right; color: red;">Logout</button>
+        </div>
+    </div>
+
+    <script>
+
+        (function () {
+            let ws = null;
+            let currentRoom = "General";
+            let availableRooms = [];
+        
+            // 1. GET TOKEN IMMEDIATELY
+            const token = localStorage.getItem('chat_token');
+            const username = localStorage.getItem('chat_username');
+
+            // 2. SECURITY CHECK
+            if (!token) {
+                alert("You must log in first!");
+                window.location.href = "/login.html";
+            }
+
+            // Display username in the UI
+            if (username) {
+                document.getElementById('display-username').textContent = username;
+            }
+
+            function connectWebSocket() {
+                if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+                    return;
+                }
+
+                const host = window.location.host;
+                const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+                
+                // 3. PASS TOKEN IN URL
+                ws = new WebSocket(`${protocol}//${host}/ws?token=${token}`);
+                
+                ws.onopen = function(event) {
+                    console.log("Connected to WebSocket");
+                    // Show the chat UI now that we are connected
+                    document.getElementById("chat-section").style.display = "block";
+                };
+        
+                ws.onmessage = function(event) {
+                    try {
+                        const data = JSON.parse(event.data);
+                        
+                        switch (data.type) {
+                            case "room_list":
+                                availableRooms = data.rooms;
+                                displayRoomList();
+                                break;
+                        
+                            case "room_switched":
+                                currentRoom = data.room;
+                                document.getElementById("current-room").textContent = currentRoom;
+                                document.getElementById("messages").innerHTML = ""; // Clear old messages
+                                addMessage(`<em>Switched to room: ${currentRoom}</em>`);
+                                updateRoomButtons();
+                                break;
+                        
+                            case "error":
+                                alert(`Error: ${data.message}`);
+                                break;
+                    
+                            case "chat":
+                                const isMe = data.username === username;
+                                const sender = isMe ? "You" : data.username;
+                                const style = isMe ? "color: blue;" : "color: black;";
+                                addMessage(`<span style="${style}"><b>${sender}</b>: ${data.text}</span>`);
+                                break;
+
+                            default:
+                                console.warn("Unknown message type:", data.type);
+                        }
+                    } catch (e) {
+                        console.error("Parse error", e);
+                        addMessage(event.data);
+                        
+                    }
+                };
+        
+                ws.onclose = function(event) {
+                    if (event.code === 1008) {
+                        alert("Session expired or invalid. Please login again.");
+                        localStorage.removeItem('chat_token');
+                        window.location.href = "/login.html";
+                    } else {
+                        console.log("Disconnected. Retrying...");
+                        setTimeout(connectWebSocket, 3000);
+                    }
+                };
+            }
+
+            function safeSend(data) {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify(data));
+                } else {
+                    console.error("Connection not open.");
+                }
+            }
+            
+            function addMessage(html) {
+                const messagesDiv = document.getElementById("messages");
+                messagesDiv.innerHTML += `<div>${html}</div>`;
+                messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            }
+        
+            function displayRoomList() {
+                const roomListDiv = document.getElementById("room-list");
+                roomListDiv.innerHTML = ""; // Clear existing
+                
+                availableRooms.forEach(room => {
+                    const btn = document.createElement("button");
+                    btn.textContent = room;
+                    btn.className = "room-btn";
+                    if (room === currentRoom) btn.className += " active";
+                    
+                    btn.onclick = function() { switchRoom(room); };
+                    
+                    roomListDiv.appendChild(btn);
+                });
+            }
+        
+            function updateRoomButtons() {
+                displayRoomList();
+            }
+
+            // --- Public Functions ---
+
+            window.sendMessage = function() {
+                const input = document.getElementById("messageInput");
+                if (!input.value) return;
+                
+                safeSend({
+                    type: "chat",
+                    text: input.value
+                });
+                input.value = "";
+            };
+
+            window.switchRoom = function(newRoom) {
+                if (newRoom === currentRoom) return;
+                
+                safeSend({
+                    type: "switch_room",
+                    room: newRoom
+                });
+            };
+
+            window.logout = function() {
+                localStorage.removeItem('chat_token');
+                localStorage.removeItem('chat_username');
+                window.location.href = '/login.html';
+            };
+
+            // Start
+            document.addEventListener('DOMContentLoaded', function() {
+                const msgInput = document.getElementById("messageInput");
+                if (msgInput) {
+                    msgInput.addEventListener("keypress", function(e) {
+                        if (e.key === "Enter") window.sendMessage();
+                    });
+                }
+                connectWebSocket();
+            });
+        })();
+    </script>
+</body>
+</html>

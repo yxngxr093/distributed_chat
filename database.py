@@ -22,15 +22,16 @@ class Message(Base):
     username = Column(String)
     text = Column(String)
     room = Column(String)
-    timestamp = Column(DateTime)
+    timestamp = Column(DateTime, default=datetime.datetime.utcnow)
 
 class User(Base):
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String, unique=True)
+    password_hash = Column(String)
     token = Column(String, unique=True)
-    created_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 async def init_db():
